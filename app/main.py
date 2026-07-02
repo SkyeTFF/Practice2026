@@ -1,24 +1,64 @@
-from app.db.db import SessionLocal
-from app.db.crud import get_categories, get_books
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from sqlalchemy.sql import text
 
-def main():
-    db = SessionLocal()
+from app.api import categories, books
+from app.db.db import engine, Base, SessionLocal
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Управление жизненным циклом приложения.
+    Выполняется ОДИН раз при запуске и завершении сервера.
+    """
+    # 1. Автоматически создаем таблицы в PostgreSQL (если они еще не созданы)
+    Base.metadata.create_all(bind=engine)
+    print("[INFO] База данных проверена: таблицы успешно инициализированы.")
+    
+    # 2. Проверяем физическое подключение к PostgreSQL на старте
     try:
-        print("\n=== СПИСОК КАТЕГОРИЙ ===")
-        categories = get_categories(db)
-        for cat in categories:
-            print(f"ID: {cat.id} | Название: {cat.title}")
-
-        print("\n=== СПИСОК КНИГ ===")
-        books = get_books(db)
-        for book in books:
-            print(f"ID: {book.id} | Название: '{book.title}' | Цена: {book.price} руб. | Категория ID: {book.category_id}")
-            if book.description:
-                print(f"   Описание: {book.description}")
-            print("-" * 40)
-
+        db = SessionLocal()
+        db.execute(text("SELECT 1"))
+        print("[INFO] Успешное тестовое подключение к PostgreSQL.")
+    except Exception as ex:
+        print(f"[CRITICAL] Не удалось подключиться к базе данных на старте: {ex}")
     finally:
         db.close()
+        
+    yield  # В этой точке приложение работает и принимает HTTP-запросы
+    
+    # Код ниже выполнится при остановке сервера (Uvicorn shutdown)
+    print("[INFO] Сервер останавливается. Завершение работы ресурсов...")
 
-if __name__ == "__main__":
-    main()
+
+# Создаем объект приложения с передачей логики жизненного цикла
+app = FastAPI(
+    title="Octagon Book Store API",
+    description="Полноценное API для управления книжным магазином с интеграцией PostgreSQL",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# Подключаем модули с маршрутами
+app.include_router(categories.router)
+app.include_router(books.router)
+
+
+@app.get("/health", tags=["System"], status_code=200)
+def health_check():
+    """
+    Эндпоинт для проверки жизнеспособности сервиса.
+    Используется для мониторинга (Health Check).
+    """
+    return {
+        "status": "healthy",
+        "service": "Octagon Book Store API",
+        "database": "connected"
+    }
+
+
+@app.get("/", tags=["Root"])
+def root():
+    """Корневой маршрут со ссылкой на автодокументацию."""
+    return {"message": "Добро пожаловать! Перейдите на /docs для работы с интерактивным Swagger API."}
